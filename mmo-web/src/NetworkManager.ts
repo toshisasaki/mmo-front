@@ -7,6 +7,8 @@ export interface PlayerState {
     position: [number, number] | { x: number, y: number };
     health: number;
     max_health: number;
+    mana: number;
+    max_mana: number;
 }
 
 export interface ProjectileState {
@@ -14,21 +16,31 @@ export interface ProjectileState {
     position: [number, number] | { x: number, y: number };
 }
 
+export interface EnemyState {
+    id: number;
+    position: [number, number] | { x: number, y: number };
+    health: number;
+    max_health: number;
+}
+
 export interface ServerEvent {
     Snapshot?: {
         tick: number;
         players: PlayerState[];
         projectiles: ProjectileState[];
+        enemies: EnemyState[];
     };
     PlayerJoined?: { id: number, name: string, position: [number, number] };
     PlayerLeft?: { id: number };
     Chat?: { id: number, text: string };
 }
 
+export type SpellType = 'Fireball' | 'Dash' | 'Heal';
+
 export interface ClientCommand {
     Join?: { name: string };
     Move?: { dir: [number, number] };
-    CastSpell?: { target: [number, number] };
+    CastSpell?: { spell: SpellType, target: [number, number] };
     Chat?: { text: string };
 }
 

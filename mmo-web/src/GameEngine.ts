@@ -9,10 +9,11 @@ export class GameEngine {
     // State
     private snapshots: { time: number, data: NonNullable<ServerEvent['Snapshot']> }[] = [];
     private renderState = {
-        players: new Map<number, { x: number, y: number, hp: number, max: number, name: string }>(),
-        projectiles: [] as { x: number, y: number }[]
+        players: new Map<number, { x: number, y: number, hp: number, max: number, mana: number, max_mana: number, name: string }>(),
+        projectiles: [] as { x: number, y: number }[],
+        enemies: new Map<number, { x: number, y: number, hp: number, max: number }>()
     };
-
+    private mapData: any = null;
 
     // Config
     private renderTimeOffset = 100;
@@ -20,6 +21,16 @@ export class GameEngine {
     constructor(network: NetworkManager) {
         this.network = network;
         this.network.on('snapshot', (snap: any) => this.onSnapshot(snap));
+        this.loadMap();
+    }
+
+    private async loadMap() {
+        try {
+            const res = await fetch('/map.json');
+            this.mapData = await res.json();
+        } catch (e) {
+            console.error("Failed to load map:", e);
+        }
     }
 
     setCanvas(canvas: HTMLCanvasElement) {
@@ -28,8 +39,6 @@ export class GameEngine {
         this.startLoop();
         this.setupInput();
     }
-
-
 
     private onSnapshot(snapshot: any) {
         this.snapshots.push({
@@ -92,13 +101,30 @@ export class GameEngine {
                 const pos2 = this.getPos(p2);
                 const x = pos1.x + (pos2.x - pos1.x) * clampedT;
                 const y = pos1.y + (pos2.y - pos1.y) * clampedT;
-                newPlayers.set(p2.id, { x, y, hp: p2.health, max: p2.max_health, name: p2.name });
+                newPlayers.set(p2.id, { x, y, hp: p2.health, max: p2.max_health, mana: p2.mana, max_mana: p2.max_mana, name: p2.name });
             } else {
                 const pos2 = this.getPos(p2);
-                newPlayers.set(p2.id, { ...pos2, hp: p2.health, max: p2.max_health, name: p2.name });
+                newPlayers.set(p2.id, { ...pos2, hp: p2.health, max: p2.max_health, mana: p2.mana, max_mana: p2.max_mana, name: p2.name });
             }
         });
         this.renderState.players = newPlayers;
+
+        const newEnemies = new Map<number, any>();
+        s2.data.enemies?.forEach((e2) => {
+            const e1 = s1.data.enemies?.find(e => e.id === e2.id);
+            if (e1) {
+                const pos1 = this.getPos(e1);
+                const pos2 = this.getPos(e2);
+                const x = pos1.x + (pos2.x - pos1.x) * clampedT;
+                const y = pos1.y + (pos2.y - pos1.y) * clampedT;
+                newEnemies.set(e2.id, { x, y, hp: e2.health, max: e2.max_health });
+            } else {
+                const pos2 = this.getPos(e2);
+                newEnemies.set(e2.id, { ...pos2, hp: e2.health, max: e2.max_health });
+            }
+        });
+        this.renderState.enemies = newEnemies;
+
         this.renderState.projectiles = s1.data.projectiles?.map(p => this.getPos(p)) || [];
     }
 
@@ -111,11 +137,33 @@ export class GameEngine {
         ctx.fillStyle = '#2c3e50';
         ctx.fillRect(0, 0, width, height);
 
-        // Grid
-        ctx.strokeStyle = '#34495e';
-        ctx.lineWidth = 1;
-        for (let x = 0; x <= width; x += 50) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke(); }
-        for (let y = 0; y <= height; y += 50) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke(); }
+        // Map
+        if (this.mapData) {
+            const { tilewidth, tileheight, width: mapW, layers } = this.mapData;
+            layers.forEach((layer: any) => {
+                if (layer.name === "Collision") {
+                    ctx.fillStyle = "#7f8c8d"; // Wall color
+                } else if (layer.name === "Ground") {
+                    ctx.fillStyle = "#27ae60"; // Grass color
+                } else {
+                    return; // Skip unknown layers
+                }
+
+                layer.data.forEach((tile: number, i: number) => {
+                    if (tile !== 0) {
+                        const x = (i % mapW) * tilewidth;
+                        const y = Math.floor(i / mapW) * tileheight;
+                        ctx.fillRect(x, y, tilewidth, tileheight);
+                    }
+                });
+            });
+        } else {
+            // Fallback Grid
+            ctx.strokeStyle = '#34495e';
+            ctx.lineWidth = 1;
+            for (let x = 0; x <= width; x += 50) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke(); }
+            for (let y = 0; y <= height; y += 50) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke(); }
+        }
 
         // Players
         this.renderState.players.forEach((p, id) => {
@@ -128,7 +176,7 @@ export class GameEngine {
             ctx.fillStyle = 'white';
             ctx.font = "10px Arial";
             ctx.textAlign = "center";
-            ctx.fillText(p.name || `ID:${id}`, p.x, p.y - 15);
+            ctx.fillText(p.name || `ID:${id}`, p.x, p.y - 35); // Moved up above bars
 
             // Health Bar
             const hpPct = p.hp / p.max;
@@ -136,6 +184,26 @@ export class GameEngine {
             ctx.fillRect(p.x - 15, p.y - 25, 30, 4);
             ctx.fillStyle = '#2ecc71';
             ctx.fillRect(p.x - 15, p.y - 25, 30 * hpPct, 4);
+
+            // Mana Bar
+            const manaPct = (p.mana || 0) / (p.max_mana || 100);
+            ctx.fillStyle = '#2c3e50';
+            ctx.fillRect(p.x - 15, p.y - 20, 30, 4);
+            ctx.fillStyle = '#3498db';
+            ctx.fillRect(p.x - 15, p.y - 20, 30 * manaPct, 4);
+        });
+
+        // Enemies
+        this.renderState.enemies.forEach((e, id) => {
+            ctx.fillStyle = '#9b59b6'; // Purple for Slime
+            ctx.fillRect(e.x - 10, e.y - 10, 20, 20); // Square shape
+
+            // Health Bar
+            const hpPct = e.hp / e.max;
+            ctx.fillStyle = 'red';
+            ctx.fillRect(e.x - 10, e.y - 15, 20, 3);
+            ctx.fillStyle = '#2ecc71';
+            ctx.fillRect(e.x - 10, e.y - 15, 20 * hpPct, 3);
         });
 
         // Projectiles
@@ -150,6 +218,16 @@ export class GameEngine {
     private setupInput() {
         if (!this.canvas) return;
 
+
+        // Track global mouse
+        let mouseX = 0;
+        let mouseY = 0;
+        this.canvas.addEventListener('mousemove', (e) => {
+            const rect = this.canvas!.getBoundingClientRect();
+            mouseX = e.clientX - rect.left;
+            mouseY = e.clientY - rect.top;
+        });
+
         // Keyboard
         window.addEventListener('keydown', (e) => {
             let dx = 0, dy = 0;
@@ -158,17 +236,30 @@ export class GameEngine {
                 case 's': dy = 1; break;
                 case 'a': dx = -1; break;
                 case 'd': dx = 1; break;
+
+                case '1':
+                    this.network.send({ CastSpell: { spell: 'Fireball', target: [mouseX, mouseY] } });
+                    break;
+                case '2':
+                    this.network.send({ CastSpell: { spell: 'Dash', target: [mouseX, mouseY] } });
+                    break;
+                case '3':
+                    this.network.send({ CastSpell: { spell: 'Heal', target: [mouseX, mouseY] } });
+                    break;
+
                 default: return;
             }
-            this.network.send({ Move: { dir: [dx, dy] } });
+            if (dx !== 0 || dy !== 0) {
+                this.network.send({ Move: { dir: [dx, dy] } });
+            }
         });
 
-        // Mouse
+        // Mouse (Default Fireball)
         this.canvas.addEventListener('mousedown', (e) => {
             const rect = this.canvas!.getBoundingClientRect();
             const x = e.clientX - rect.left;
             const y = e.clientY - rect.top;
-            this.network.send({ CastSpell: { target: [x, y] } });
+            this.network.send({ CastSpell: { spell: 'Fireball', target: [x, y] } });
         });
     }
 }
